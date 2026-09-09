@@ -30,7 +30,7 @@
  */
 "use strict";
 
-const BUILD = "2026-09-09.3"; // para no analizar sin querer una copia cacheada
+const BUILD = "2026-09-09.4"; // para no analizar sin querer una copia cacheada
 const TIMEOUT_MS = 15000; // el de la propia API
 const AVISO_MS = 20000; // solo avisa por pantalla: no cierra nada
 const COLGADA_MS = 75000; // a partir de aquí sí se declara colgada
@@ -207,7 +207,11 @@ function leerPosicion(alAvisar) {
 /** Sufijo con las salvedades que hacen que un tiempo NO sea comparable. */
 function salvedades(p, huboDialogo) {
   const s = [];
-  if (huboDialogo) s.push("incluye el diálogo de permiso: el tiempo NO mide la API");
+  // En iPhone `permissions.query` devuelve siempre "prompt", aunque el permiso
+  // esté concedido, así que ahí «hubo diálogo» sería siempre cierto y el aviso
+  // dejaría de informar. Se matiza en vez de mentir.
+  if (huboDialogo && esIos()) s.push("iOS no deja saber si hubo diálogo; si lo hubo, el tiempo no mide la API");
+  else if (huboDialogo) s.push("incluye el diálogo de permiso: el tiempo NO mide la API");
   if (p.seFueAlFondo) s.push("la app pasó a segundo plano: el tiempo no vale");
   return s.length ? " · ⚠ " + s.join(" · ") : "";
 }
@@ -281,16 +285,41 @@ function tomarPegado(txt) {
   return { lat, lng };
 }
 
-function guardarConfig() {
+/** Guarda radio y regla. NO toca las coordenadas. */
+function guardarAjustes() {
   config.radio = +$("radio").value;
   config.regla = $("regla").value;
+  const ok = escribir(CLAVE_CONF, config);
+  pintarResumen();
+  return ok;
+}
+
+/** Guarda lo que hay en los CAMPOS. Solo desde el `change` de los campos. */
+function guardarDesdeCampos() {
   const c = tomarCoordenadas();
   if (c) {
     config.lat = c.lat;
     config.lng = c.lng;
   }
-  const ok = escribir(CLAVE_CONF, config);
-  pintarResumen();
+  return guardarAjustes();
+}
+
+/**
+ * Fija el punto de trabajo desde código (botón de posición, probar-fuera,
+ * pegado) y refleja el cambio en los campos.
+ *
+ * Existe separado por un fallo real: antes, tras poner las coordenadas nuevas
+ * se llamaba a una única función de guardado que RELEÍA los campos de texto —
+ * que todavía tenían el valor viejo — y machacaba lo recién puesto. Resultado:
+ * «usar mi posición» y «probar fuera» no cambiaban nada, y la distancia se
+ * quedaba clavada. Lo detectó una prueba de campo en la que fijar el trabajo
+ * donde estabas seguía dando 386 m.
+ */
+function fijarPunto(lat, lng) {
+  config.lat = lat;
+  config.lng = lng;
+  const ok = guardarAjustes();
+  pintarCampos();
   return ok;
 }
 
@@ -324,10 +353,7 @@ $("usarAqui").addEventListener("click", async () => {
       return;
     }
   }
-  config.lat = +p.lat.toFixed(6);
-  config.lng = +p.lng.toFixed(6);
-  guardarConfig();
-  pintarCampos();
+  fijarPunto(+p.lat.toFixed(6), +p.lng.toFixed(6));
   apuntar(`${sello} · ANCLA · fijada · precisión ±${Math.round(p.precision)}m · ${p.ms}ms${salvedades(p, ultimoPermiso !== "granted")}`);
   alert(`Trabajo fijado aquí.\nPrecisión de esta lectura: ±${Math.round(p.precision)} m.`);
 });
@@ -337,14 +363,13 @@ $("guardar").addEventListener("click", () => {
     alert("Latitud o longitud no válidas.");
     return;
   }
-  alert(guardarConfig() ? "Configuración guardada." : "Guardada solo para esta sesión: el móvil no deja almacenar (¿modo privado?).");
+  alert(guardarDesdeCampos() ? "Configuración guardada." : "Guardada solo para esta sesión: el móvil no deja almacenar (¿modo privado?).");
 });
 
 // Radio y regla se aplican al vuelo; las coordenadas también, para que FICHAR
 // nunca mida contra algo distinto de lo que se ve en pantalla.
-["radio", "regla", "lat", "lng"].forEach((id) =>
-  $(id).addEventListener("change", guardarConfig),
-);
+["radio", "regla"].forEach((id) => $(id).addEventListener("change", guardarAjustes));
+["lat", "lng"].forEach((id) => $(id).addEventListener("change", guardarDesdeCampos));
 
 $("pegar").addEventListener("click", () => {
   const c = tomarPegado($("pegado").value);
@@ -358,10 +383,7 @@ $("pegar").addEventListener("click", () => {
     );
     return;
   }
-  config.lat = c.lat;
-  config.lng = c.lng;
-  guardarConfig();
-  pintarCampos();
+  fijarPunto(c.lat, c.lng);
   $("pegado").value = "";
   alert(`Trabajo fijado en ${c.lat}, ${c.lng}.`);
 });
@@ -373,9 +395,7 @@ $("probarFuera").addEventListener("click", () => {
   }
   // Mueve el ancla 1 km al norte: sirve para comprobar que el bloqueo funciona
   // sin tener que caminar. 1 km está fuera de cualquier radio de la lista.
-  config.lat = +(config.lat + 1000 / 111320).toFixed(6);
-  guardarConfig();
-  pintarCampos();
+  fijarPunto(+(config.lat + 1000 / 111320).toFixed(6), config.lng);
   apuntar(`${new Date().toLocaleString("es-ES")} · ANCLA · movida 1 km al norte para probar el caso FUERA`);
   alert("Trabajo movido 1 km al norte.\n\nAhora pulsa FICHAR: debe salir FUERA.\nDespués vuelve a pulsar «usar mi posición» para dejarlo bien.");
 });
