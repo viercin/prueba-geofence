@@ -1,0 +1,16 @@
+{
+  "name": "Prueba de geofence — fichaje",
+  "short_name": "Geofence",
+  "description": "Banco de pruebas para decidir si el control por ubicación es viable en una PWA instalada.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14352c",
+  "theme_color": "#14352c",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
