@@ -30,7 +30,7 @@
  */
 "use strict";
 
-const BUILD = "2026-09-09.4"; // para no analizar sin querer una copia cacheada
+const BUILD = "2026-09-09.5"; // para no analizar sin querer una copia cacheada
 const TIMEOUT_MS = 15000; // el de la propia API
 const AVISO_MS = 20000; // solo avisa por pantalla: no cierra nada
 const COLGADA_MS = 75000; // a partir de aquí sí se declara colgada
@@ -495,6 +495,25 @@ $("copiar").addEventListener("click", () => {
   }
 });
 
+$("actualizar").addEventListener("click", async () => {
+  // Salida de emergencia: en una PWA de iPhone no hay barra de direcciones ni
+  // botón de recargar, así que sin esto la única forma de actualizar era
+  // borrar el icono y volver a instalarla.
+  try {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if (window.caches) {
+      const n = await caches.keys();
+      await Promise.all(n.map((k) => caches.delete(k)));
+    }
+  } catch (e) {
+    /* da igual: lo que importa es la recarga de abajo */
+  }
+  location.replace(location.pathname + "?recarga=" + Date.now());
+});
+
 $("limpiar").addEventListener("click", () => {
   if (!confirm("¿Borrar el registro de intentos?")) return;
   registro = [];
@@ -503,6 +522,7 @@ $("limpiar").addEventListener("click", () => {
 });
 
 // ── Arranque ───────────────────────────────────────────────────────────────
+$("build").textContent = "build " + BUILD;
 pintarCampos();
 pintarResumen();
 pintarRegistro();
