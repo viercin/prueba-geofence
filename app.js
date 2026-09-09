@@ -30,7 +30,7 @@
  */
 "use strict";
 
-const BUILD = "2026-09-09.2"; // para no analizar sin querer una copia cacheada
+const BUILD = "2026-09-09.3"; // para no analizar sin querer una copia cacheada
 const TIMEOUT_MS = 15000; // el de la propia API
 const AVISO_MS = 20000; // solo avisa por pantalla: no cierra nada
 const COLGADA_MS = 75000; // a partir de aquí sí se declara colgada
@@ -226,22 +226,57 @@ function pintarRegistro() {
 }
 
 // ── Configuración ──────────────────────────────────────────────────────────
-function pintarConfig() {
+/**
+ * Escribe en los campos. Se llama SOLO al arrancar y cuando el botón fija la
+ * posición — NUNCA mientras el usuario teclea.
+ *
+ * Antes se llamaba en cada `change`, así que al salir del campo te reescribía
+ * lo escrito con lo que hubiera guardado: si aún no cuadraba, te lo borraba.
+ * Desde fuera parecía «no me deja escribir las coordenadas».
+ */
+function pintarCampos() {
   $("lat").value = config.lat === null ? "" : config.lat;
   $("lng").value = config.lng === null ? "" : config.lng;
   $("radio").value = String(config.radio);
   $("regla").value = config.regla;
+}
+
+function pintarResumen() {
   $("resumenConf").textContent =
     config.lat === null
       ? "Sin configurar: no se puede fichar todavía."
       : `Trabajo en ${config.lat}, ${config.lng} · radio ${config.radio} m · regla ${config.regla === "duda" ? "con margen" : "estricta"}`;
 }
 
+/**
+ * Convierte texto a número aceptando lo que de verdad escribe la gente:
+ * coma decimal española, espacios, signo, y el punto como separador.
+ */
+function aNumero(txt) {
+  const limpio = String(txt).trim().replace(/\s+/g, "").replace(",", ".");
+  if (limpio === "" || !/^-?\d*\.?\d+$/.test(limpio)) return NaN;
+  return parseFloat(limpio);
+}
+
 /** Lee los campos y actualiza `config`. Devuelve null si hay error. */
 function tomarCoordenadas() {
-  const norm = (s) => String(s).trim().replace(",", ".");
-  const lat = parseFloat(norm($("lat").value));
-  const lng = parseFloat(norm($("lng").value));
+  const lat = aNumero($("lat").value);
+  const lng = aNumero($("lng").value);
+  if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return { lat, lng };
+}
+
+/**
+ * Acepta un par pegado tal cual sale de Google Maps o de donde sea:
+ *   "41.3874, 2.1686"   "41,3874 2,1686"   "41.3874;2.1686"
+ * Existe porque algunos teclados de móvil en modo decimal no ofrecen ni coma
+ * ni punto, y entonces es literalmente imposible teclear la coordenada.
+ */
+function tomarPegado(txt) {
+  const nums = String(txt).match(/-?\d+(?:[.,]\d+)?/g);
+  if (!nums || nums.length < 2) return null;
+  const lat = aNumero(nums[0]);
+  const lng = aNumero(nums[1]);
   if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
   return { lat, lng };
 }
@@ -255,7 +290,7 @@ function guardarConfig() {
     config.lng = c.lng;
   }
   const ok = escribir(CLAVE_CONF, config);
-  pintarConfig();
+  pintarResumen();
   return ok;
 }
 
@@ -289,9 +324,10 @@ $("usarAqui").addEventListener("click", async () => {
       return;
     }
   }
-  $("lat").value = p.lat.toFixed(6);
-  $("lng").value = p.lng.toFixed(6);
+  config.lat = +p.lat.toFixed(6);
+  config.lng = +p.lng.toFixed(6);
   guardarConfig();
+  pintarCampos();
   apuntar(`${sello} · ANCLA · fijada · precisión ±${Math.round(p.precision)}m · ${p.ms}ms${salvedades(p, ultimoPermiso !== "granted")}`);
   alert(`Trabajo fijado aquí.\nPrecisión de esta lectura: ±${Math.round(p.precision)} m.`);
 });
@@ -310,6 +346,26 @@ $("guardar").addEventListener("click", () => {
   $(id).addEventListener("change", guardarConfig),
 );
 
+$("pegar").addEventListener("click", () => {
+  const c = tomarPegado($("pegado").value);
+  if (!c) {
+    alert(
+      "No he sabido leer eso." +
+        "\n\n" +
+        "Pega las dos cifras juntas, por ejemplo:" +
+        "\n" +
+        "41.3874, 2.1686",
+    );
+    return;
+  }
+  config.lat = c.lat;
+  config.lng = c.lng;
+  guardarConfig();
+  pintarCampos();
+  $("pegado").value = "";
+  alert(`Trabajo fijado en ${c.lat}, ${c.lng}.`);
+});
+
 $("probarFuera").addEventListener("click", () => {
   if (config.lat === null) {
     alert("Primero fija dónde está el trabajo.");
@@ -317,9 +373,9 @@ $("probarFuera").addEventListener("click", () => {
   }
   // Mueve el ancla 1 km al norte: sirve para comprobar que el bloqueo funciona
   // sin tener que caminar. 1 km está fuera de cualquier radio de la lista.
-  const nuevaLat = +(config.lat + 1000 / 111320).toFixed(6);
-  $("lat").value = nuevaLat;
+  config.lat = +(config.lat + 1000 / 111320).toFixed(6);
   guardarConfig();
+  pintarCampos();
   apuntar(`${new Date().toLocaleString("es-ES")} · ANCLA · movida 1 km al norte para probar el caso FUERA`);
   alert("Trabajo movido 1 km al norte.\n\nAhora pulsa FICHAR: debe salir FUERA.\nDespués vuelve a pulsar «usar mi posición» para dejarlo bien.");
 });
@@ -427,7 +483,8 @@ $("limpiar").addEventListener("click", () => {
 });
 
 // ── Arranque ───────────────────────────────────────────────────────────────
-pintarConfig();
+pintarCampos();
+pintarResumen();
 pintarRegistro();
 pintarContexto("APERTURA");
 // Al volver a la app se vuelve a mirar el permiso: es como se contesta la

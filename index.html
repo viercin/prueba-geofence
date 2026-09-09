@@ -100,9 +100,13 @@
   <button id="usarAqui">Estoy en el trabajo: usar mi posición</button>
   <p class="nota">Púlsalo <b>dentro del local</b>. Es lo que haría el dueño al
     configurarlo.</p>
-  <div class="fila">
-    <div><label for="lat">Latitud</label><input id="lat" inputmode="decimal" placeholder="41.3874"></div>
-    <div><label for="lng">Longitud</label><input id="lng" inputmode="decimal" placeholder="2.1686"></div>
+  <label for="pegado">…o pega las coordenadas de golpe</label>
+  <input id="pegado" type="text" placeholder="41.3874, 2.1686">
+  <p class="nota">Vale tal cual salen de Google Maps. Da igual coma o punto.</p>
+  <button class="sec" id="pegar">Usar estas coordenadas</button>
+  <div class="fila" style="margin-top:12px">
+    <div><label for="lat">Latitud</label><input id="lat" type="text" inputmode="text" placeholder="41.3874"></div>
+    <div><label for="lng">Longitud</label><input id="lng" type="text" inputmode="text" placeholder="2.1686"></div>
   </div>
   <label for="radio">Radio permitido</label>
   <select id="radio">
