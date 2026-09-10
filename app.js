@@ -30,7 +30,7 @@
  */
 "use strict";
 
-const BUILD = "2026-09-09.5"; // para no analizar sin querer una copia cacheada
+const BUILD = "2026-09-10.1"; // para no analizar sin querer una copia cacheada
 const TIMEOUT_MS = 15000; // el de la propia API
 const AVISO_MS = 20000; // solo avisa por pantalla: no cierra nada
 const COLGADA_MS = 75000; // a partir de aquí sí se declara colgada
@@ -138,17 +138,28 @@ async function pintarContexto(motivo) {
 
 // ── Lectura de posición ────────────────────────────────────────────────────
 /**
- * `alAvisar` se llama a los AVISO_MS si aún no hay respuesta, para que el
- * probador vea que sigue esperando y no crea que se ha bloqueado.
- * El resultado final llega SIEMPRE por la promesa, y una respuesta tardía
- * gana al vigía: eso es justo lo que la primera versión hacía mal.
+ * ESCALERA DE INTENTOS. Un solo intento no basta para diagnosticar.
+ *
+ * En la prueba de campo, un Android 10 con el permiso CONCEDIDO agotó los 15 s
+ * ocho veces seguidas. Pedíamos posición de alta precisión y recién medida
+ * (`enableHighAccuracy: true, maximumAge: 0`), que obliga a un fix de GPS real:
+ * bajo techo, con la ubicación del sistema en modo «solo dispositivo», eso no
+ * llega nunca. El iPhone contestaba en milisegundos porque sí usa wifi y red.
+ *
+ * Con un único intento, «no funciona en Android» y «no funciona pidiéndolo
+ * así» son indistinguibles — y son cosas muy distintas para el producto. Por
+ * eso ahora se prueban tres formas, de más exigente a menos, y se apunta CUÁL
+ * respondió. Esa es la información que decide el diseño.
  */
-function leerPosicion(alAvisar) {
+const ESCALONES = [
+  { nombre: "GPS preciso", opts: { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 } },
+  { nombre: "red/wifi", opts: { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 } },
+  { nombre: "última conocida", opts: { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 } },
+];
+
+/** Un intento suelto. Nunca lanza: siempre resuelve con un resultado. */
+function unIntento(opts, alAvisar) {
   return new Promise((resolve) => {
-    if (!navigator.geolocation) {
-      resolve({ resultado: "error", mensaje: "El navegador no tiene geolocalización", ms: 0 });
-      return;
-    }
     const t0 = Date.now();
     let cerrado = false;
     let seFueAlFondo = document.visibilityState !== "visible";
@@ -169,7 +180,9 @@ function leerPosicion(alAvisar) {
     const tAviso = setTimeout(() => {
       if (!cerrado && alAvisar) alAvisar(AVISO_MS);
     }, AVISO_MS);
-
+    // El vigía solo cierra si la API NO llamó a nada: ni éxito ni error. Es el
+    // fallo de iOS que se venía a cazar, y por eso vive muy por encima del
+    // timeout propio de la API.
     const tColgada = setTimeout(
       () =>
         terminar({
@@ -190,18 +203,49 @@ function leerPosicion(alAvisar) {
       (err) =>
         terminar({
           resultado: "error",
+          codigo: err.code,
           mensaje:
             err.code === 1
               ? "Permiso denegado"
               : err.code === 2
                 ? "Posición no disponible"
                 : err.code === 3
-                  ? "Se agotó el tiempo de la API"
+                  ? "Se agotó el tiempo"
                   : err.message || "Error desconocido",
         }),
-      { enableHighAccuracy: true, timeout: TIMEOUT_MS, maximumAge: 0 },
+      opts,
     );
   });
+}
+
+async function leerPosicion(alAvisar) {
+  if (!navigator.geolocation) {
+    return { resultado: "error", mensaje: "El navegador no tiene geolocalización", ms: 0, via: "—" };
+  }
+  const fallos = [];
+  let msTotal = 0;
+  for (let i = 0; i < ESCALONES.length; i++) {
+    const esc = ESCALONES[i];
+    const r = await unIntento(esc.opts, (ms) => alAvisar && alAvisar(ms, esc.nombre));
+    msTotal += r.ms;
+    if (r.resultado === "ok") {
+      return Object.assign({}, r, { via: esc.nombre, msTotal, intentosFallidos: fallos });
+    }
+    // Un permiso denegado no mejora bajando el listón: no se insiste.
+    if (r.codigo === 1) {
+      return Object.assign({}, r, { via: esc.nombre, msTotal, intentosFallidos: fallos });
+    }
+    fallos.push(`${esc.nombre}: ${r.mensaje} (${r.ms}ms)`);
+  }
+  return {
+    resultado: "error",
+    mensaje: "Ningún método dio posición · " + fallos.join(" · "),
+    ms: msTotal,
+    msTotal,
+    via: "ninguna",
+    intentosFallidos: fallos,
+    seFueAlFondo: false,
+  };
 }
 
 /** Sufijo con las salvedades que hacen que un tiempo NO sea comparable. */
@@ -213,6 +257,9 @@ function salvedades(p, huboDialogo) {
   if (huboDialogo && esIos()) s.push("iOS no deja saber si hubo diálogo; si lo hubo, el tiempo no mide la API");
   else if (huboDialogo) s.push("incluye el diálogo de permiso: el tiempo NO mide la API");
   if (p.seFueAlFondo) s.push("la app pasó a segundo plano: el tiempo no vale");
+  if (p.intentosFallidos && p.intentosFallidos.length) {
+    s.push("hubo que bajar el listón — " + p.intentosFallidos.join(" · "));
+  }
   return s.length ? " · ⚠ " + s.join(" · ") : "";
 }
 
@@ -418,8 +465,8 @@ $("fichar").addEventListener("click", async () => {
   const permisoAntes = await estadoPermiso();
   const huboDialogo = permisoAntes !== "granted";
 
-  const p = await leerPosicion((ms) => {
-    b.textContent = `SIN RESPUESTA A LOS ${ms / 1000}s…`;
+  const p = await leerPosicion((ms, escalon) => {
+    b.textContent = `PROBANDO ${escalon.toUpperCase()}…`;
   });
   b.disabled = false;
   b.textContent = "FICHAR";
@@ -432,7 +479,12 @@ $("fichar").addEventListener("click", async () => {
     v.style.display = "block";
     v.style.color = "#fff";
     v.style.background = "var(--mal)";
-    v.innerHTML = `NO TE DEJARÍA FICHAR<small>${p.mensaje}</small>`;
+    const pista =
+      p.via === "ninguna" && esAndroid()
+        ? "<br><br>Ningún método ha dado posición. Mira en Ajustes → Ubicación " +
+          "que esté encendida y en modo de <b>alta precisión</b> (no «solo dispositivo»)."
+        : "";
+    v.innerHTML = `NO TE DEJARÍA FICHAR<small>${p.mensaje}${pista}</small>`;
     apuntar(`${sello} · ${ctx} · ${p.resultado.toUpperCase()} · ${p.mensaje} · ${p.ms}ms${extra}`);
     return;
   }
@@ -463,6 +515,7 @@ $("fichar").addEventListener("click", async () => {
   $("detalle").style.display = "";
   $("dDist").textContent = metros(dist);
   $("dPrec").textContent = `± ${Math.round(p.precision)} m`;
+  $("dVia").textContent = p.via;
   $("dMs").textContent = `${p.ms} ms${huboDialogo ? " (incluye el diálogo)" : ""}`;
   $("dOtra").textContent =
     config.regla === "duda"
@@ -472,7 +525,7 @@ $("fichar").addEventListener("click", async () => {
   apuntar(
     `${sello} · ${ctx} · ${indecidible ? "INDECIDIBLE" : dentro ? "DENTRO" : "FUERA"} · ` +
       `dist ${Math.round(dist)}m · prec ±${Math.round(p.precision)}m · radio ${config.radio}m · ` +
-      `pos ${p.lat.toFixed(5)},${p.lng.toFixed(5)} · ${p.ms}ms${extra}`,
+      `via ${p.via} · pos ${p.lat.toFixed(5)},${p.lng.toFixed(5)} · ${p.ms}ms${extra}`,
   );
 });
 
