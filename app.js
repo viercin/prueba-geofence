@@ -30,7 +30,7 @@
  */
 "use strict";
 
-const BUILD = "2026-09-10.2"; // para no analizar sin querer una copia cacheada
+const BUILD = "2026-09-10.3"; // para no analizar sin querer una copia cacheada
 const TIMEOUT_MS = 15000; // el de la propia API
 const AVISO_MS = 20000; // solo avisa por pantalla: no cierra nada
 const COLGADA_MS = 75000; // a partir de aquí sí se declara colgada
@@ -543,10 +543,22 @@ $("fichar").addEventListener("click", async () => {
     v.style.display = "block";
     v.style.color = "#fff";
     v.style.background = "var(--mal)";
+    // Causa REAL encontrada en la prueba de campo del 10/09/2026, tras cuatro
+    // escalones fallidos en un Xiaomi con el permiso concedido y wifi: el
+    // interruptor «Mejorar la precisión de la ubicación» estaba APAGADO. Es el
+    // que da posicionamiento por wifi y antenas; sin él solo queda GPS, que
+    // bajo techo no cuaja nunca. Encenderlo lo arregló en el acto: de cuatro
+    // timeouts a 162 ms.
+    //
+    // Lo importante para el producto: NO es el permiso de ubicación, es un
+    // ajuste APARTE del sistema, y desde la web es invisible. Se ve «permiso
+    // concedido» y aun así no hay posición.
     const pista =
       p.via === "ninguna" && esAndroid()
-        ? "<br><br>Ningún método ha dado posición. Mira en Ajustes → Ubicación " +
-          "que esté encendida y en modo de <b>alta precisión</b> (no «solo dispositivo»)."
+        ? "<br><br>Casi seguro que es este ajuste, y no el permiso:<br>" +
+          "<b>Ajustes → Ubicación → Servicios de ubicación → Precisión de la " +
+          "ubicación → Mejorar la precisión de la ubicación</b>.<br>" +
+          "Sin él solo queda el GPS, que bajo techo no llega nunca."
         : "";
     v.innerHTML = `NO TE DEJARÍA FICHAR<small>${p.mensaje}${pista}</small>`;
     apuntar(`${sello} · ${ctx} · ${p.resultado.toUpperCase()} · ${p.mensaje} · ${p.ms}ms${extra}`);
