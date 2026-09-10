@@ -30,7 +30,7 @@
  */
 "use strict";
 
-const BUILD = "2026-09-10.1"; // para no analizar sin querer una copia cacheada
+const BUILD = "2026-09-10.2"; // para no analizar sin querer una copia cacheada
 const TIMEOUT_MS = 15000; // el de la propia API
 const AVISO_MS = 20000; // solo avisa por pantalla: no cierra nada
 const COLGADA_MS = 75000; // a partir de aquí sí se declara colgada
@@ -155,7 +155,66 @@ const ESCALONES = [
   { nombre: "GPS preciso", opts: { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 } },
   { nombre: "red/wifi", opts: { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 } },
   { nombre: "última conocida", opts: { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 } },
+  { nombre: "suscripción", suscripcion: 20000 },
 ];
+
+/**
+ * Cuarto escalón: `watchPosition` en vez de `getCurrentPosition`.
+ *
+ * No es un capricho. `getCurrentPosition` espera a que el proveedor que elija
+ * el navegador entregue un fix y, si ese no cuaja, agota el tiempo sin más.
+ * `watchPosition` se suscribe y entrega EN CUANTO cualquier proveedor reporta
+ * algo, aunque sea malo — y se puede cancelar en cuanto llega el primero.
+ *
+ * Se añadió tras ver un Android donde los tres escalones normales agotaban el
+ * tiempo incluso aceptando una posición cacheada de cinco minutos: el navegador
+ * ni devolvía ni fallaba. Si este tampoco da nada, el problema no es cómo lo
+ * pedimos.
+ */
+function porSuscripcion(ms) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    let id = null;
+    let cerrado = false;
+    const terminar = (r) => {
+      if (cerrado) return;
+      cerrado = true;
+      clearTimeout(reloj);
+      if (id !== null && navigator.geolocation.clearWatch) {
+        try {
+          navigator.geolocation.clearWatch(id);
+        } catch (e) {
+          /* da igual */
+        }
+      }
+      resolve(Object.assign({ ms: Date.now() - t0, seFueAlFondo: false }, r));
+    };
+    const reloj = setTimeout(
+      () => terminar({ resultado: "error", codigo: 3, mensaje: "Se agotó el tiempo" }),
+      ms,
+    );
+    try {
+      id = navigator.geolocation.watchPosition(
+        (pos) =>
+          terminar({
+            resultado: "ok",
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            precision: pos.coords.accuracy,
+          }),
+        (err) =>
+          terminar({
+            resultado: "error",
+            codigo: err.code,
+            mensaje: err.code === 1 ? "Permiso denegado" : err.message || "Error",
+          }),
+        { enableHighAccuracy: true, timeout: ms, maximumAge: 600000 },
+      );
+    } catch (e) {
+      terminar({ resultado: "error", mensaje: "watchPosition no disponible" });
+    }
+  });
+}
 
 /** Un intento suelto. Nunca lanza: siempre resuelve con un resultado. */
 function unIntento(opts, alAvisar) {
@@ -226,7 +285,12 @@ async function leerPosicion(alAvisar) {
   let msTotal = 0;
   for (let i = 0; i < ESCALONES.length; i++) {
     const esc = ESCALONES[i];
-    const r = await unIntento(esc.opts, (ms) => alAvisar && alAvisar(ms, esc.nombre));
+    // Se avisa ANTES de empezar cada escalón: si tarda 50 s en total, el
+    // probador tiene que ver que sigue trabajando y por dónde va.
+    if (alAvisar) alAvisar(0, esc.nombre);
+    const r = esc.suscripcion
+      ? await porSuscripcion(esc.suscripcion)
+      : await unIntento(esc.opts, (ms) => alAvisar && alAvisar(ms, esc.nombre));
     msTotal += r.ms;
     if (r.resultado === "ok") {
       return Object.assign({}, r, { via: esc.nombre, msTotal, intentosFallidos: fallos });
